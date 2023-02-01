@@ -1,0 +1,322 @@
+Communication Between Threads and Processes:
+
+All parallel applications require some element of communication between either the threads or the processes. There is usually an implicit or explicit action of one thread sending data to another thread. For example, one thread might be signaling to another that work is ready for them. We have already seen an example of this where a semaphore might indicate to waiting threads that initialization has completed. The thread signaling the semaphore does not know whether there are other threads waiting for that signal. Alternatively, a thread might be placing a message on a queue, and the message would be received by the thread tasked with handling that queue.
+
+These mechanisms usually require operating system support to mediate the sending of messages between threads or processes. Programmers can invent their own implementa-tions, but it can be more efficient to rely on the operating system to put a thread to sleep until a condition is true or until a message is received.
+
+The following sections outline various mechanisms to enable processes or threads to pass messages or share data.
+
+· Memory, Shared Memory, and Memory-Mapped Files
+
+· Condition Variables
+
+· Signals and Events
+
+· Message Queues
+
+· Named Pipes
+
+· Communication Through the Network Stack
+
+· Other Approaches to Sharing Data Between Threads
+
+Memory, Shared Memory, and Memory-Mapped Files
+
+The easiest way for multiple threads to communicate is through memory. If two threads can access the same memory location, the cost of that access is little more than the memory latency of the system. Of course, memory accesses still need to be controlled to ensure that only one thread writes to the same memory location at a time. A multi-threaded application will share memory between the threads by default, so this can be a very low-cost approach. The only things that are not shared between threads are variables on the stack of each thread (local variables) and thread-local variables, which will be dis-cussed later.
+
+Sharing memory between multiple processes is more complicated. By default, all processes have independent address spaces, so it is necessary to preconfigure regions of memory that can be shared between different processes.
+
+To set up shared memory between two processes, one process will make a library call to create a shared memory region. The call will use a unique descriptor for that shared memory. This descriptor is usually the name of a file in the file system. The create call returns a handle identifier that can then be used to map the shared memory region into the address space of the application. This mapping returns a pointer to the newly mapped memory. This pointer is exactly like the pointer that would be returned by malloc() and can be used to access memory within the shared region.
+
+When each process exits, it detaches from the shared memory region, and then the last process to exit can delete it. Listing 4.15 shows the rough process of creating and deleting a region of shared memory.
+
+Listing 4.15 Creating and Deleting a Shared Memory Segment
+
+ID = Open Shared Memory( Descriptor ) ;
+
+Memory = Map Shared Memory( ID ) ;
+
+...
+
+Memory[100]++ ;
+
+...
+
+Close Shared Memory( ID ) ;
+
+Delete Shared Memory( Descriptor ) ;
+
+Listing 4.16 shows the process of attaching to an existing shared memory segment. In this instance, the shared region of memory is already created, so the same descriptor used to create it can be used to attach to the existing shared memory region. This will provide the process with an ID that can be used to map the region into the process.
+
+Listing 4.16 Attaching to an Existing Shared Memory Segment
+
+ID = Open Shared Memory( Descriptor ) ;
+
+Memory = Map Shared Memory( ID ) ;
+
+...
+
+Close Shared Memory( ID ) ;
+
+A shared memory segment may remain on the system until it is removed, so it is important to plan on which process has responsibility for creating and removing it.
+
+Condition Variables
+
+Condition variables communicate readiness between threads by enabling a thread to be woken up when a condition becomes true. Without condition variables, the waiting thread would have to use some form of polling to check whether the condition had become true.
+
+Condition variables work in conjunction with a mutex. The mutex is there to ensure that only one thread at a time can access the variable. For example, the producer-consumer model can be implemented using condition variables. Suppose an application has one producer thread and one consumer thread. The producer adds data onto a queue, and the consumer removes data from the queue. If there is no data on the queue, then the consumer needs to sleep until it is signaled that an item of data has been placed on the queue. Listing 4.17 shows the pseudocode for a producer thread adding an item onto the queue.
+
+Listing 4.17 Producer Thread Adding an Item to the Queue
+
+Acquire Mutex() ;
+
+Add Item to Queue() ;
+
+If ( Only One Item on Queue )
+
+{
+
+Signal Conditions Met() ;
+
+}
+
+Release Mutex() ;
+
+The producer thread needs to signal a waiting consumer thread only if the queue was empty and it has just added a new item into that queue. If there were multiple items already on the queue, then the consumer thread must be busy processing those items and cannot be sleeping. If there were no items in the queue, then it is possible that the con-sumer thread is sleeping and needs to be woken up.
+
+Listing 4.18 shows the pseudocode for the consumer thread.
+
+Listing 4.18 Code for Consumer Thread Removing Items from Queue
+
+Acquire Mutex() ;
+
+Repeat
+
+Item = 0 ;
+
+If ( No Items on Queue() )
+
+{
+
+Wait on Condition Variable() ;
+
+}
+
+If (Item on Queue())
+
+{
+
+Item = remove from Queue() ;
+
+}
+
+Until ( Item != 0 ) ;
+
+Release Mutex() ;
+
+The consumer thread will wait on the condition variable if the queue is empty. When the producer thread signals it to wake up, it will first check to see whether there is any-thing on the queue. It is quite possible for the consumer thread to be woken only to find the queue empty ; it is important to realize that the thread waking up does not imply that the condition is now true, which is why the code is in a repeat loop in the example. If there is an item on the queue, then the consumer thread can handle that item; otherwise, it returns to sleep.
+
+The interaction with the mutex is interesting. The producer thread needs to acquire the mutex before adding an item to the queue. It needs to release the mutex after adding the item to the queue, but it still holds the mutex when signaling. The consumer thread cannot be woken until the mutex is released. The producer thread releases the mutex after the signaling has completed ; releasing the mutex is necessary for the consumer thread to make progress.
+
+The consumer thread acquires the mutex ; it will need it to be able to safely modify the queue. If there are no items on the queue, then the consumer thread will wait for an item to be added. The call to wait on the condition variable will cause the mutex to be released, and the consumer thread will wait to be signaled. When the consumer thread wakes up, it will hold the mutex; either it will release the mutex when it has removed an item from the queue or, if there is still nothing in the queue, it will release the mutex with another call to wait on the condition variable.
+
+The producer thread can use two types of wake-up calls: Either it can wake up a sin-gle thread or it can broadcast to all waiting threads. Which one to use depends on the context. If there are multiple items of data ready for processing, it makes sense to wake up multiple threads with a broadcast. On the other hand, if the producer thread has added only a single item to the queue, it is more appropriate to wake up only a single thread. If all the threads are woken, it can take some time for all the threads to wake up, execute, and return to waiting, placing an unnecessary burden on the system. Notice that because each thread has to own the mutex when it wakes up, the process of waking all the waiting threads is serial ; only a single thread can be woken at a time.
+
+The other point to observe is that when a wake-up call is broadcast to all threads, some of them may be woken when there is no work for them to do. This is one reason why it is necessary to place the wait on the condition variable in a loop.
+
+The other problem to be aware of with condition variables is the lost wake-up. This occurs when the signal to wake up the waiting thread is sent before the thread is ready to receive it. Listing 4.19 shows a version of the consumer thread code. This version of the code can suffer from the lost wake-up problem.
+
+Listing 4.19 Consumer Thread Code with Potential Lost Wake-Up Problem
+
+Repeat
+
+Item = 0 ;
+
+If ( No Items on Queue() )
+
+{
+
+Acquire Mutex() ;
+
+Wait on Condition Variable() ; Release Mutex();
+
+}
+
+Acquire Mutex() ;
+
+If ( Item on Queue() )
+
+{
+
+Item = remove from Queue() ;
+
+}
+
+Release Mutex() ;
+
+Until ( Item!=0 ) ;
+
+The problem with the code is the first if condition. If there are no items on the queue, then the mutex lock is acquired, and the thread waits on the condition variable. However, the producer thread could have placed an item and signaled the consumer thread between the consumer thread executing the if statement and acquiring the mutex. When this happens, the consumer thread waits on the condition variable indefi-nitely because the producer thread, in Listing 4.17, signals only when it places the first item into the queue.
+
+Signals and Events
+
+Signals are a UNIX mechanism where one process can send a signal to another process and have a handler in the receiving process perform some task upon the receipt of the message. Many features of UNIX are implemented using signals. Stopping a running application by pressing ^C causes a SIGKILL signal to be sent to the process.
+
+Windows has a similar mechanism for events. The handling of keyboard presses and mouse moves are performed through the event mechanism. Pressing one of the buttons on the mouse will cause a click event to be sent to the target window.
+
+Signals and events are really optimized for sending limited or no data along with the signal, and as such they are probably not the best mechanism for communication when compared to other options.
+
+Listing 4.20 shows how a signal handler is typically installed and how a signal can be sent to that handler. Once the signal handler is installed, sending a signal to that thread will cause the signal handler to be executed.
+
+Listing 4.20 Installing and Using a Signal Handler
+
+void signalHandler(void *signal)
+
+{
+
+...
+
+}
+
+int main()
+
+{
+
+installHandler( SIGNAL, signalHandler ) ; sendSignal( SIGNAL );
+
+}
+
+Message Queues
+
+A message queue is a structure that can be shared between multiple processes. Messages can be placed into the queue and will be removed in the same order in which they were added. Constructing a message queue looks rather like constructing a shared memory segment. The first thing needed is a descriptor, typically the location of a file in the file system. This descriptor can either be used to create the message queue or be used to attach to an existing message queue. Once the queue is configured, processes can place messages into it or remove messages from it. Once the queue is finished, it needs to be deleted.
+
+Listing 4.21 shows code for creating and placing messages into a queue. This code is also responsible for removing the queue after use.
+
+Listing 4.21 Creating and Placing Messages into a Queue
+
+ID = Open Message Queue Queue( Descriptor ) ;
+
+Put Message in Queue( ID, Message ) ;
+
+...
+
+Close Message Queue( ID ) ;
+
+Delete Message Queue( Description ) ;
+
+Listing 4.22 shows the process for receiving messages for a queue. Using the descrip-tor for an existing message queue enables two processes to communicate by sending and receiving messages through the queue.
+
+Listing 4.22 Opening a Queue and Receiving Messages
+
+ID=Open Message Queue ID(Descriptor) ;
+
+Message=Remove Message from Queue(ID) ;
+
+...
+
+Close Message Queue(ID) ;
+
+Named Pipes
+
+UNIX uses pipes to pass data from one process to another. For example, the output from the command ls, which lists all the files in a directory, could be piped into the wc com-mand, which counts the number of lines, words, and characters in the input. The combi-nation of the two commands would be a count of the number of files in the directory.
+
+Named pipes provide a similar mechanism that can be controlled programmatically. Named pipes are file-like objects that are given a specific name that can be shared
+
+between processes. Any process can write into the pipe or read from the pipe. There is no concept of a “message” ; the data is treated as a stream of bytes. The method for using a named pipe is much like the method for using a file: The pipe is opened, data is writ-ten into it or read from it, and then the pipe is closed.
+
+Listing 4.23 shows the steps necessary to set up and write data into a pipe, before closing and deleting the pipe. One process needs to actually make the pipe, and once it has been created, it can be opened and used for either reading or writing. Once the process has completed, the pipe can be closed, and one of the processes using it should also be responsible for deleting it.
+
+Listing 4.23 Setting Up and Writing into a Pipe
+
+Make Pipe( Descriptor ) ;
+
+ID = Open Pipe( Descriptor ) ;
+
+Write Pipe( ID, Message, sizeof(Message) ) ;
+
+...
+
+Close Pipe( ID ) ;
+
+Delete Pipe( Descriptor ) ;
+
+Listing 4.24 shows the steps necessary to open an existing pipe and read messages from it. Processes using the same descriptor can open and use the same pipe for communication.
+
+Listing 4.24 Opening an Existing Pipe to Receive Messages
+
+ID=Open Pipe( Descriptor ) ;
+
+Read Pipe( ID, buffer, sizeof(buffer) ) ;
+
+...
+
+Close Pipe( ID ) ;
+
+Communication Through the Network Stack
+
+The network stack is a fairly complex set of layers that range from the network card up to the layer that provides the network packet communication used by applications like web browsers. Full coverage of it is outside the scope of this book. However, networking is available on most platforms, and as such it is a possible candidate for communication. An advantage to using networking to communicate is that applications can communicate between processes on a single system or processes on different systems connected by a network. The only changes necessary would be in the address where the packets of data were sent. Although communications across a network can be quite high latency, using networking to communicate between processes on the same machine will typically be lower cost, but not as low cost as some of the other methods of communication.
+
+Communication across the network usually involves a client-server model. To set up a server, it is first necessary to open a socket and then bind that socket to the address on the local host before starting to listen for incoming connections. When a connection arrives, data can be read from it or written to it, until the connection is closed. Once the connection is closed, it is possible to close the socket. Listing 4.25 illustrates how the server thread of a client-server network connection can be set up.
+
+Listing 4.25 Setting Up Socket to Listen for Connections
+
+ID = Open Socket( Descriptor ) ; Bind Socket( ID, Address ); Listen( ID )
+
+Conx = Wait for connection( ID ) ; Read( Conx, buffer, sizeof(buffer) );
+
+...
+
+Close( Conx ) ; Close Socket( ID );
+
+Listing 4.26 shows the steps necessary to set up a client socket to connect to the server. Connecting to a remote server also requires initially setting up a socket. Once the socket is open, it can be used to connect to the server. After the communication is com-plete, the socket can be closed.
+
+Listing 4.26 Setting Up a Socket to Connect to a Remote Server
+
+ID=Open Socket( Descriptor ) ;
+
+Connect( ID, Address ) ;
+
+Write( ID, buffer, sizeof(buffer) ) ;
+
+...
+
+Close( ID ) ;
+
+Other Approaches to Sharing Data Between Threads
+
+There are several other approaches to sharing data. For example, data can be written to a file to be read by another process at a later point. This might be acceptable if the data needs to be stored persistently or if the data will be used at some later point. Still, writ-ing to disk presents a long latency operation, which is not the best mechanism if the purpose is purely communication.
+
+There are also operating system–specific approaches to sharing data between processes. Solaris doors allow one process to pass an item of data to another process and have the processed result returned. Doors are optimized for the round-trip and hence can be cheaper than using two different messages.
+
+
+
+////////////////////////////////////////////////////////////////////
+
+Critical section:
+critical sections prevent thread and process migration between processors and the preemption of processes and threads by interrupts and other processes and threads. 
+
+Deadlock:
+A deadlock is a condition involving one or more threads of execution and one or more resources, such that each thread is waiting for one of the resources, but all the resources are already held.
+
+Race condition:
+A race condition is an undesirable situation that occurs when a device or system attempts to perform two or more operations at the same time, but because of the nature of the device or system, the operations must be done in the proper sequence to be done correctly.
+
+
+Binary Semaphore:
+1.Its functions based up on signalling mechanism	
+2.The thread which is having higher priority than current thread can also release binary semaphore and take lock.	
+3.Semaphore value is changed according to wait () and signal () operations.	
+4.Multiple number of threads can acquire binary semaphore at a time concurrently.	
+5.Binary semaphore have no ownership.	
+6.They are faster than mutex because any other thread/process can unlock binary semaphore.	
+7.If you have number of instances for resource it is better to use Binary semaphore.
+
+
+MUTEX:
+1.Its functions based up on locking mechanism.
+2.The thread which has acquired mutex can only release Mutex when it exits from critical section.
+3.Mutex values can be modified just as locked or unlocked.
+4.Only one thread can acquire mutex at a time
+5.There is ownership associated with mutex because only owner can release the lock.
+6.They are slower than binary semaphores because only thread which has acquired must release the lock.
+7.	If you have single instance for resource it is better to use mutex.
