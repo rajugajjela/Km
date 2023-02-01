@@ -1,0 +1,47 @@
+#ZOMBIE PROCESS:
+--> A zombie process is a process in its terminated state.
+This usually happens in a program that has parent-child functions.
+After a child function has finished execution, it sends an exit status to its parent function.
+Until the parent function receives and acknowledges the message, the child function remains in a “zombie” state, meaning it has executed but not exited.
+
+#ORPHAN process
+-->Orphan processes are those processes that are still running even though their parent process has terminated or finished.
+
+difference between fork(),vfork():
+FORK():
+1.	In fork() system call, child and parent process have separate memory space.
+2.	The child process and parent process gets executed simultaneously.
+3.	The fork() system call uses copy-on-write as an alternative.	
+4.	Child process does not suspend parent process execution in fork() system call.	
+5.	Page of one process is not affected by page of other process.	
+6.	fork() system call is more used.	
+7.	There is wastage of address space.	
+8.	If child process alters page in address space, it is invisible to parent process.	
+
+VFORK():
+1.While in vfork() system call, child and parent process share same address space.
+2.	Once child process is executed then parent process starts its execution.
+3.While vfork() system call does not use copy-on-write.
+4.Child process suspends parent process execution in vfork() system call.
+5.Page of one process is affected by page of other process.
+6.vfork() system call is less used.
+7.There is no wastage of address space.
+8.If child process alters page in address space, it is visible to parent process.
+
+Exec():
+The exec call is a way to basically replace the entire current process with a new program. It loads the program into the current process space and runs it from the entry point. exec() replaces the current process with a the executable pointed by the function. Control never returns to the original program unless there is an exec() error.
+exec() family of functions or sys calls replaces current process image with new process image.
+
+There are functions like execl, execlp,execle,execv, execvp and execvpe are used to execute a file.
+
+These functions are combinations of array of pointers to null terminated strings that represent the argument list , this will have path variable with some environment variable combinations.
+
+
+LIST OF SYSTEM CALLS:
+fork() − A parent process always uses a fork for creating a new child process. The child process is generally called a copy of the parent. After execution of fork, both parent and child execute the same program in separate processes.
+
+exec() − This function is used to replace the program executed by a process. The child sometimes may use exec after a fork for replacing the process memory space with a new program executable making the child execute a different program than the parent.
+
+exit() − This function is used to terminate the process.
+
+wait() − The parent uses a wait function to suspend execution till a child terminates. Using wait the parent can obtain the exit status of a terminated child.
