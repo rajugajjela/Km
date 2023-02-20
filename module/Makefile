@@ -1,4 +1,5 @@
-obj-m += hello.o
+#obj-m += hello.o
+obj-m += hello_pid.o
 
 all:
 	make -C /lib/modules/`uname -r`/build M=$(shell pwd) modules
